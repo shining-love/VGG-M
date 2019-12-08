@@ -1,0 +1,276 @@
+# -*- coding: utf-8 -*-
+"""
+# tensorflow中用于图的输入输出的占位符
+x = tf.placeholder(tf.float32, [BATCH_SIZE, 224, 224, 3])
+y = tf.placeholder(tf.float32, [BATCH_SIZE, NUM_CLASSES])
+keep_prob = tf.placeholder(tf.float32)  # dropout的比例，一般设为0.5
+WEIGHTS_PATH = 'VGG-M.npy'
+# 构建VGGNET(VGG-M)网络模型
+###############################################################
+def inference_op(x, keep_prob, NUM_CLASSES):
+    X = x
+    KEEP_PROB = keep_prob
+    """Create the vgg16 network graph."""
+    # 1st Layer
+    conv1 = conv(X, 7, 7, 96, 2, 2, padding='VALID', name='conv1')
+    norm1 = lrn(conv1, 2, 0.0001, 0.75, name='norm1')
+    pool1 = max_pool(norm1, 2, 2, 2, 2, padding='VALID', name='pool1')
+
+
+    # 2nd Layer
+    conv2 = conv(pool1, 5, 5, 256, 2, 2, padding='VALID', name='conv2')#same
+    norm2 = lrn(conv2, 2, 0.0001, 0.75, name='norm2')
+    pool2 = max_pool(norm2, 2, 2, 2, 2, padding='VALID', name='pool2')
+
+
+    # 3rd Layer
+    conv3 = conv(pool2, 3, 3, 512, 1, 1, padding='VALID', name='conv3')#same
+
+    # 4th Layer
+    conv4 = conv(conv3, 3, 3, 512, 1, 1, padding='VALID', name='conv4') #same
+
+
+    # 5th Layer: Conv (w ReLu) -> Pool splitted into two groups
+    conv5 = conv(conv4, 3, 3, 512, 1, 1, padding='VALID', name='conv5') #same
+    pool5 = max_pool(conv5, 2, 2, 2, 2, padding='VALID', name='pool5')
+
+
+    '''
+    '''
+    # 6th Layer: Flatten -> FC (w ReLu) -> Dropout
+    flattened = tf.reshape(pool5, [-1, 6 * 6 * 512])
+    fc6 = fc(flattened, 6 * 6 * 512, 4096, name='fc6')
+    dropout6 = dropout(fc6, KEEP_PROB)
+
+
+
+    # 7th Layer: FC (w ReLu) -> Dropout
+    fc7 = fc(dropout6, 4096, 4096, name='fc7')
+    dropout7 = dropout(fc7, KEEP_PROB)
+
+
+    # 8th Layer: FC and return unscaled activations
+    fc8 = fc(dropout7, 4096, NUM_CLASSES, relu=False, name='fc8')
+    return fc8
+def load_initial_weights2(session):
+    # Load the weights into memory
+    weights_dict = np.load(WEIGHTS_PATH, encoding='latin1', allow_pickle=True).item()
+    print("npy file loaded")
+
+    for op_name in weights_dict:
+        # Check if layer should be trained from scratch
+        if op_name not in train_layers:
+            with tf.variable_scope(op_name, reuse=True):
+                # Assign weights/biases to their corresponding tf variable
+                for data in weights_dict[op_name]:
+                    if op_name == 'fc6':
+                        if len(data.shape) == 1:
+                            var = tf.get_variable('biases', trainable=False)
+                            session.run(var.assign(data))
+                        # Weights
+                        else:
+                            data = data.reshape([-1, 4096])
+                            var = tf.get_variable('weights', trainable=False)
+                            session.run(var.assign(data))
+
+                    elif op_name == 'fc7':
+                        if len(data.shape) == 1:
+                            var = tf.get_variable('biases', trainable=False)
+                            session.run(var.assign(data))
+                        # Weights
+                        else:
+                            data = data.reshape([-1, 4096])
+                            var = tf.get_variable('weights', trainable=False)
+                            session.run(var.assign(data))
+                    else:
+                        if len(data.shape) == 1:
+                            var = tf.get_variable('biases', trainable=False)
+                            session.run(var.assign(data))
+
+                        # Weights
+                        else:
+                            var = tf.get_variable('weights', trainable=False)
+                            session.run(var.assign(data))
+
+
+####################################################################################
+
+def conv(x, filter_height, filter_width, num_filters, stride_y, stride_x, name,
+         padding='SAME', groups=1):
+    """Create a convolution layer.
+
+    Adapted from: https://github.com/ethereon/caffe-tensorflow
+    """
+    # Get number of input channels
+    input_channels = int(x.get_shape()[-1])
+    if name == 'conv2':
+        x = tf.pad(x, paddings=[[0, 0], [0, 0], [0, 0], [0, 0]]) # 每条边pad两层0
+    elif name == 'conv1':
+        x = tf.pad(x, paddings=[[0, 0], [0, 0], [0, 0], [0, 0]]) # No pad
+    else:
+        x = tf.pad(x, paddings=[[0, 0], [1, 1], [1, 1], [0, 0]]) # 每条边pad一层0
+
+    # Create lambda function for the convolution
+    convolve = lambda i, k: tf.nn.conv2d(i, k,
+                                         strides=[1, stride_y, stride_x, 1],
+                                         padding=padding)
+
+    with tf.variable_scope(name) as scope:
+        # Create tf variables for the weights and biases of the conv layer
+        weights = tf.get_variable('weights', shape=[filter_height,
+                                                    filter_width,
+                                                    input_channels / groups,
+                                                    num_filters], initializer=tf.glorot_uniform_initializer)
+        print(weights)
+        biases = tf.get_variable('biases', shape=[num_filters], trainable=True)
+        print(biases)
+
+    if groups == 1:
+        conv = convolve(x, weights)
+
+    # In the cases of multiple groups, split inputs & weights and
+    else:
+        # Split input and weights and convolve them separately
+        input_groups = tf.split(axis=3, num_or_size_splits=groups, value=x)
+        weight_groups = tf.split(axis=3, num_or_size_splits=groups,
+                                 value=weights)
+        output_groups = [convolve(i, k) for i, k in zip(input_groups, weight_groups)]
+
+        # Concat the convolved output together again
+        conv = tf.concat(axis=3, values=output_groups)
+
+    # Add biases
+    bias = tf.reshape(tf.nn.bias_add(conv, biases), tf.shape(conv))
+
+    # Apply relu function
+    relu = tf.nn.relu(bias, name=scope.name)
+
+    return relu
+
+def fc(x, num_in, num_out, name, relu=True):
+    """Create a fully connected layer."""
+    with tf.variable_scope(name) as scope:
+
+        # Create tf variables for the weights and biases
+        weights = tf.get_variable('weights', shape=[num_in, num_out],
+                                  trainable=True, initializer=tf.glorot_uniform_initializer)
+        biases = tf.get_variable('biases', [num_out], initializer=tf.constant_initializer(0.1), trainable=True)
+
+        # Matrix multiply weights and inputs and add bias
+        act = tf.nn.xw_plus_b(x, weights, biases, name=scope.name)
+
+    if relu:
+        # Apply ReLu non linearity
+        relu = tf.nn.relu(act)
+        return relu
+    else:
+        return act
+
+def lrn(x, radius, alpha, beta, name, bias=1.0):
+    """Create a local response normalization layer."""
+    return tf.nn.local_response_normalization(x, depth_radius=radius,
+                                              alpha=alpha, beta=beta,
+                                              bias=bias, name=name)
+
+def max_pool(x, filter_height, filter_width, stride_y, stride_x, name,
+             padding='SAME'):
+    """Create a max pooling layer."""
+    return tf.nn.max_pool(x, ksize=[1, filter_height, filter_width, 1],
+                          strides=[1, stride_y, stride_x, 1],
+                          padding=padding, name=name)
+
+def dropout(x, keep_prob):
+    """Create a dropout layer."""
+    return tf.nn.dropout(x, keep_prob)
+
+
+# 将最后一层卷积层或池化后的变量链接到模型输出
+score, fc = inference_op(x, keep_prob, NUM_CLASSES)  # 将数据放进去网络中
+colsize = fc.shape[-1]
+
+# 我们想要训练层的可训练变量的列表
+var_list = [v for v in tf.trainable_variables() if v.name.split('/')[0] in train_layers]
+# 计算损失
+with tf.name_scope("cross_ent"):
+    loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=score,
+                                                                  labels=y))
+# 训练操作
+with tf.name_scope("train"):
+    # 获取所有可训练变量的梯度
+    gradients = tf.gradients(loss, var_list)
+    gradients = list(zip(gradients, var_list))
+
+    # 创建优化器并对可训练变量应用梯度下降
+    optimizer = tf.train.AdamOptimizer(learning_rate)
+    train_op = optimizer.apply_gradients(grads_and_vars=gradients)
+
+# Evaluation op: Accuracy of the model
+with tf.name_scope("accuracy"):
+    correct_pred = tf.equal(tf.argmax(score, 1), tf.argmax(y, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+
+
+# 获取每个epoch中训练和测试的步骤数目
+print(tr_data.data_size)
+print(BATCH_SIZE)
+train_batches_per_epoch = int(np.floor(tr_data.data_size / BATCH_SIZE))
+val_batches_per_epoch = int(np.floor(val_data.data_size / BATCH_SIZE))
+
+#######################################################################
+
+def ConvNet(number_of_training_epochs, train_batches_per_epoch,
+            accuracy):  # train_batches_per_epoch为每个epoch中的batch总数目，这里为52=训练样本总数/每个batch总的样本数目
+
+    print("\n#########################\nConvNet Train/Test\n#########################")
+    load_initial_weights(sess)
+    print("{} Start training...".format(datetime.now()))
+    initial_time = time.time()
+
+    # 循环遍历每个epoch
+    for epoch in range(number_of_training_epochs):
+        print("{} Epoch number: {}".format(datetime.now(), epoch + 1))
+        # 使用训练数据集初始化迭代器
+        sess.run(training_init_op)
+        train_accuracy = 0
+        train_count = 0
+        for step in range(train_batches_per_epoch):
+            # 获取下一批次（下一个epoch）的数据(包含32个样本)
+            img_batch, label_batch = sess.run(next_batch)  # img_batch为[32,227,227,3],label_batch为[32,21]
+            #print(img_batch)
+            #print(label_batch)
+            # 进行训练op，并获取训练精度
+            img_batch = img_batch / 255.0
+            train_op.run(feed_dict={x: img_batch, y: label_batch, keep_prob: dropout_rate})
+            trainaccuracy = accuracy.eval(feed_dict={x: img_batch, y: label_batch, keep_prob: 1.})
+            train_accuracy += trainaccuracy
+            train_count += 1
+        train_accuracy /= train_count
+        print("\ntrain_accuracy = ", train_accuracy)
+        training_time = time.time() - initial_time
+        # 测试精度
+        print("{} Start validation".format(datetime.now()))
+        sess.run(validation_init_op)
+        test_acc = 0
+        test_count = 0
+        for _ in range(val_batches_per_epoch):
+            img_batch, label_batch = sess.run(next_batch)
+            img_batch = img_batch / 255.0
+            acc = accuracy.eval(feed_dict={x: img_batch, y: label_batch, keep_prob: 1.})
+            test_acc += acc
+            test_count += 1
+        test_acc /= test_count
+
+        print("\nConvNet accuracy =", test_acc)
+
+    return test_acc, training_time
+#######################结束svm##########################
+###############开始#################
+
+with tf.Session() as sess:
+    for index in range(NUMBER_OF_EXPERIMENTS):
+        # 对所有变量进行初始化
+        sess.run(tf.global_variables_initializer())
+        #experiment_results["ConvNet-ACCU"], experiment_results["ConvNet-TIME"] = ConvNet(NUMBER_OF_EPOCHS,
+                                                                                         #train_batches_per_epoch,
+                                                                                         #accuracy)
+
