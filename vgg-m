@@ -98,13 +98,11 @@ def load_initial_weights2(session):
 def conv(x, filter_height, filter_width, num_filters, stride_y, stride_x, name,
          padding='SAME', groups=1):
     """Create a convolution layer.
-
-    Adapted from: https://github.com/ethereon/caffe-tensorflow
     """
     # Get number of input channels
     input_channels = int(x.get_shape()[-1])
     if name == 'conv2':
-        x = tf.pad(x, paddings=[[0, 0], [0, 0], [0, 0], [0, 0]]) # 每条边pad两层0
+        x = tf.pad(x, paddings=[[0, 0], [1, 1], [1, 1], [0, 0]]) # 每条边pad一层0
     elif name == 'conv1':
         x = tf.pad(x, paddings=[[0, 0], [0, 0], [0, 0], [0, 0]]) # No pad
     else:
@@ -186,7 +184,6 @@ def dropout(x, keep_prob):
 
 # 将最后一层卷积层或池化后的变量链接到模型输出
 score, fc = inference_op(x, keep_prob, NUM_CLASSES)  # 将数据放进去网络中
-colsize = fc.shape[-1]
 
 # 我们想要训练层的可训练变量的列表
 var_list = [v for v in tf.trainable_variables() if v.name.split('/')[0] in train_layers]
@@ -219,7 +216,7 @@ val_batches_per_epoch = int(np.floor(val_data.data_size / BATCH_SIZE))
 #######################################################################
 
 def ConvNet(number_of_training_epochs, train_batches_per_epoch,
-            accuracy):  # train_batches_per_epoch为每个epoch中的batch总数目，这里为52=训练样本总数/每个batch总的样本数目
+            accuracy):  # train_batches_per_epoch为每个epoch中的batch总数目
 
     print("\n#########################\nConvNet Train/Test\n#########################")
     load_initial_weights(sess)
@@ -263,7 +260,6 @@ def ConvNet(number_of_training_epochs, train_batches_per_epoch,
         print("\nConvNet accuracy =", test_acc)
 
     return test_acc, training_time
-#######################结束svm##########################
 ###############开始#################
 
 with tf.Session() as sess:
